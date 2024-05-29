@@ -26,6 +26,8 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torch.optim import SGD, AdamW
+from optim_adabeta import Adabeta #, AdamW
 
 from model import GPTConfig, GPT
 
@@ -54,6 +56,12 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+# Init optimizer
+globals()['init_optimizer']='' #sgdm adabeta
+globals()['init_lr']=0.01
+globals()['init_momentum']=0.9
+globals()['init_steps']=0 #100
+
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -196,10 +204,27 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+if init_optimizer == '':
+    optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+else:
+    if 'sgdm' in init_optimizer:
+        optimizer = SGD(model.parameters(), init_lr, init_momentum, weight_decay=weight_decay)
+    else:
+        optimizer = Adabeta(model.parameters(), init_lr, init_momentum, weight_decay=weight_decay)
+
+    
 if init_from == 'resume':
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    init_steps = 0
+    try:
+        optimizer = AdamW(model.parameters(), init_lr, (beta1, beta2), weight_decay=weight_decay)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    except:
+        optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+
 checkpoint = None # free up memory
+
+print('Using optimizer', optimizer)
 
 # compile the model
 if compile:
@@ -229,11 +254,13 @@ def estimate_loss():
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
+    if init_steps!=0 and it<init_steps:
+        return init_lr
     # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
+    if it < warmup_iters+init_steps:
         return learning_rate * it / warmup_iters
     # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
+    if it > lr_decay_iters+init_steps:
         return min_lr
     # 3) in between, use cosine decay down to min learning rate
     decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
@@ -253,6 +280,17 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
+
+    if init_optimizer != '':
+        if iter_num==init_steps:
+            # optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+            optimizer = AdamW(model.parameters(), init_lr, (beta1, beta2), weight_decay=weight_decay)
+            if init_from == 'resume':
+                optimizer.load_state_dict(checkpoint['optimizer'])
+            checkpoint = None # free up memory
+            print('Changed to',optimizer)                      
+
+
 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
