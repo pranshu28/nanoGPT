@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=owt_gpt_full
+#SBATCH --job-name=owt_gpt
 #SBATCH --output=/network/scratch/p/pranshu.malviya/projects/Optimization/nanoGPT/logs/%x-%j_output.txt
 #SBATCH --error=/network/scratch/p/pranshu.malviya/projects/Optimization/nanoGPT/logs/%x-%j_error.txt
-#SBATCH --time=72:00:00
-#SBATCH --partition=long    # ask for high-priority job ## short-unkillable,
+#SBATCH --time=3:00:00
+#SBATCH --partition=short-unkillable,long    # ask for high-priority job ## short-unkillable,
 #SBATCH --nodes=1                       # number of nodes
 #SBATCH --ntasks-per-node=1             # crucial - only 1 task per node!
 #SBATCH --cpus-per-task=24              # number of cpus per node
